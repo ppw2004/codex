@@ -1,5 +1,27 @@
 FROM ubuntu:24.04
 
+# 接收构建传入的代理参数
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
+
+# 同时设置大写+小写环境变量，适配 curl/wget/rustup/apt/pip
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV ALL_PROXY=${ALL_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+ENV http_proxy=${HTTP_PROXY}
+ENV https_proxy=${HTTPS_PROXY}
+ENV all_proxy=${ALL_PROXY}
+ENV no_proxy=${NO_PROXY}
+
+# apt 代理配置
+RUN echo 'Acquire::http::Proxy "'${HTTP_PROXY}'";' > /etc/apt/apt.conf.d/99proxy && \
+    echo 'Acquire::https::Proxy "'${HTTPS_PROXY}'";' >> /etc/apt/apt.conf.d/99proxy
+
+# 后面你的原有安装逻辑、rustup 安装...
+
 ARG DEBIAN_FRONTEND=noninteractive
 # enable 'universe' because musl-tools & clang live there
 RUN apt-get update && \

@@ -321,11 +321,22 @@ impl CoreToolRuntime for ExposureOverride {
 
 pub struct ToolRegistry {
     tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>,
+    /// Secondary index keyed by the flattened tool name (`namespace + name`,
+    /// see `flat_tool_name`). Fallback for models that collapse namespace +
+    /// name into a single `name` field — see `tool()`.
+    tools_by_flat: HashMap<String, Arc<dyn CoreToolRuntime>>,
 }
 
 impl ToolRegistry {
     fn new(tools: HashMap<ToolName, Arc<dyn CoreToolRuntime>>) -> Self {
-        Self { tools }
+        let tools_by_flat = tools
+            .iter()
+            .map(|(name, runtime)| (Self::model_facing_name(name), Arc::clone(runtime)))
+            .collect();
+        Self {
+            tools,
+            tools_by_flat,
+        }
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -357,7 +368,49 @@ impl ToolRegistry {
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(Arc::clone)
+        // Fast path: the model returned a split namespace + name (OpenAI and
+        // any model honoring the Responses API `namespace` field), so the
+        // ToolName matches the registry key directly.
+        self.tools
+            .get(name)
+            .or_else(|| {
+                // Fallback: the model collapsed namespace + name into a single
+                // flat `name` (observed with MiniMax-M3: it returns
+                // `mcp__<server>__<tool>` in `name` with no `namespace`). The
+                // structured `ToolName` lookup above misses because `Eq`/`Hash`
+                // compare `(namespace, name)`, but the flat string is identical
+                // for both forms, so this index recovers the match.
+                self.tools_by_flat.get(Self::model_facing_name(name).as_str())
+            })
+            .map(Arc::clone)
+    }
+
+    /// Model-facing flat name used as the secondary-index key. Mirrors
+    /// `tools::handlers::mcp::join_tool_name` + `ensure_mcp_prefix`: an MCP tool
+    /// registered as `namespace="mcp__<server>", name="<tool>"` is keyed as
+    /// `mcp__<server>__<tool>` — exactly the shape a model emits when it
+    /// collapses namespace+name into a single `name` field (observed with
+    /// MiniMax-M3). The previous key used `flat_tool_name`, which concatenates
+    /// namespace+name *without* a delimiter and so produced a malformed key that
+    /// never matched the model's `mcp__<server>__<tool>` string. Idempotent: a
+    /// name already in this shape maps to itself, so it works whether the caller
+    /// passes a split `(namespace, name)` or one collapsed `name`.
+    fn model_facing_name(name: &ToolName) -> String {
+        const DELIM: &str = "__";
+        const PREFIX: &str = "mcp__";
+        match name.namespace.as_deref() {
+            Some(ns) => {
+                let ns = ns.trim_end_matches('_');
+                let n = name.name.trim_start_matches('_');
+                let joined = format!("{ns}{DELIM}{n}");
+                if joined.starts_with(PREFIX) {
+                    joined
+                } else {
+                    format!("{PREFIX}{joined}")
+                }
+            }
+            None => name.name.clone(),
+        }
     }
 
     #[cfg(test)]

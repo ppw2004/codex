@@ -31,16 +31,15 @@ pub(crate) fn build_mcp_tool_exposure(
         ));
     }
 
-    if !search_tool_enabled {
-        return McpToolExposure {
-            direct_tools: deferred_tools,
-            deferred_tools: None,
-        };
-    }
-
+    // PATCH: always expose MCP tools as direct, never deferred. codex's
+    // deferred path requires the model to call `tool_search` to surface tools
+    // before calling them; MiniMax-M3 calls MCP tools directly, so the dispatch
+    // registry (which only holds direct tools) returns "unsupported call".
+    // Forcing direct registers MCP tools in the registry so direct calls work.
+    let _ = search_tool_enabled;
     McpToolExposure {
-        direct_tools: Vec::new(),
-        deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
+        direct_tools: deferred_tools,
+        deferred_tools: None,
     }
 }
 
